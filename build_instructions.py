@@ -73,7 +73,8 @@ def main():
         'A right-hand sidebar for the OpenCode desktop app. It shows live session '
         'telemetry: context-window usage, session cost, generation speed, cache hit '
         'ratio, MCP usage, your OpenCode Go and OpenAI subscription caps (5-hour, '
-        'weekly, monthly), and an estimated per-model share of each Go cap window.')
+        'weekly, monthly), and an estimated per-model share of each Go cap window. '
+        'A Search button beside it finds text across every past session.')
     bullets(document, [
         'Context window in percent and tokens, for the latest measured request.',
         'Session cost, taken from OpenCode\u2019s own session record.',
@@ -82,6 +83,7 @@ def main():
         'MCP servers with per-server call counts in the active context.',
         'OpenCode Go and OpenAI caps with reset times and remaining percent.',
         'Estimated per-model share of each Go cap window.',
+        'History search over user prompts and agent replies, opening hits as new tabs.',
     ])
 
     heading(document, 'Requirements', level=1)
@@ -107,9 +109,10 @@ def main():
     ]:
         document.add_paragraph(step, style='List Number')
     document.add_paragraph(
-        'You should see a Telemetry button at the bottom-right of the window. The sidebar '
-        'is open by default; click the button (or press Escape while it has focus) to '
-        'collapse it. The first refresh can take a few seconds while the session loads.')
+        'You should see a Telemetry button at the bottom-right of the window, with a Search '
+        'button beside it. The sidebar is open by default; click the button (or press Escape '
+        'while it has focus) to collapse it. The first refresh can take a few seconds while '
+        'the session loads.')
 
     heading(document, 'What it looks like when it works', level=1)
     document.add_paragraph(
@@ -126,6 +129,19 @@ def main():
         run = cap.add_run(caption)
         run.font.size = Pt(9)
         run.italic = True
+
+    heading(document, 'Search', level=1)
+    document.add_paragraph(
+        'The Search button next to Telemetry searches the text of every session stored by '
+        'OpenCode \u2014 user prompts and agent replies \u2014 and opens any hit as an additional '
+        'session tab, leaving your open sessions untouched.')
+    bullets(document, [
+        'The User and Agent checkboxes choose which roles are searched (both on by default).',
+        'The dropdown caps the number of results; an empty query lists the most recent messages.',
+        'Hover a result for a wider context window; reasoning and tool calls are never searched.',
+        'Text is escaped before rendering, the database is only ever read, and a search that '
+        'finds nothing does not slow the app down: typing again cancels the previous search.',
+    ])
 
     heading(document, 'Reading the numbers honestly', level=1)
     bullets(document, [

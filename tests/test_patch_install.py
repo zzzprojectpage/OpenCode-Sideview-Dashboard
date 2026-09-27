@@ -12,6 +12,7 @@ SOURCES = {
     'index.ts': b'export default {}\n',
     'package.json': b'{"name":"x"}\n',
     'src/quota.mjs': b'export const q = 1\n',
+    'src/search.mjs': b'export const s = 1\n',
 }
 
 
@@ -105,6 +106,43 @@ class PluginInstallTests(unittest.TestCase):
             self.run_install(fail_after_files=len(SOURCES))
         self.assertTrue(self.plugin.exists())
         self.assertSourcesWritten()
+
+    def test_upgrade_overwrites_files_recorded_by_an_earlier_install(self):
+        self.plugin.mkdir(parents=True)
+        recorded = {}
+        for name, body in SOURCES.items():
+            target = self.plugin / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'previous ' + body)
+            recorded[name] = patch.digest(target.read_bytes())
+        result = self.run_install(recorded=recorded)
+        self.assertEqual(result['status'], 'upgraded')
+        self.assertSourcesWritten()
+
+    def test_a_changed_file_without_a_record_is_still_refused(self):
+        self.plugin.mkdir(parents=True)
+        for name, body in SOURCES.items():
+            target = self.plugin / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
+        (self.plugin / 'index.ts').write_bytes(b'// someone edited this by hand\n')
+        with self.assertRaises(patch.PluginConflict):
+            self.run_install()
+
+    def test_a_foreign_file_blocks_an_upgrade_even_with_records(self):
+        self.plugin.mkdir(parents=True)
+        recorded = {}
+        for name, body in SOURCES.items():
+            target = self.plugin / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(b'previous ' + body)
+            recorded[name] = patch.digest(target.read_bytes())
+        (self.plugin / 'src/search.mjs').write_bytes(b'// not ours\n')
+        recorded.pop('src/search.mjs')
+        with self.assertRaises(patch.PluginConflict) as ctx:
+            self.run_install(recorded=recorded)
+        self.assertIn('src/search.mjs', str(ctx.exception))
+        self.assertEqual((self.plugin / 'src/search.mjs').read_bytes(), b'// not ours\n')
 
 
 if __name__ == '__main__':

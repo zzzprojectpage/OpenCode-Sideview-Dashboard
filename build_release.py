@@ -17,9 +17,10 @@ FILES = [
     'Install-Sidebar.cmd', 'Rollback-Sidebar.cmd', 'Verify-Compatibility.cmd',
     'patch_desktop.py', 'discovery.py', 'build_instructions.py', 'build_release.py',
     'index.ts', 'package.json',
-    'src/sidebar.mjs', 'src/metrics.mjs', 'src/attribution.mjs', 'src/quota.mjs',
+    'src/sidebar.mjs', 'src/metrics.mjs', 'src/attribution.mjs', 'src/quota.mjs', 'src/search.mjs',
     'tests/attribution.test.mjs', 'tests/cost.test.mjs', 'tests/metrics.test.mjs',
     'tests/plugin.test.mjs', 'tests/quota.test.mjs', 'tests/sidebar.test.mjs',
+    'tests/search.test.mjs', 'tests/search-db.test.mjs', 'tests/fixture-db.mjs',
     'tests/test_discovery.py', 'tests/test_patch.py', 'tests/test_patch_install.py',
     'tests/test_patch_e2e.py', 'tests/test_state.py', 'tests/ui_harness.html', 'tests/verify_ui.py',
 ]

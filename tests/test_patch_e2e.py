@@ -16,7 +16,12 @@ for name in ('discovery', 'patch_desktop'):
 patch = globals()['patch_desktop']
 discovery = globals()['discovery']
 
-BODY = ('const FACTORY = ' + discovery.FACTORY_TEXT + ';\n').encode()
+TABS_PROVIDER = (
+    'var tabsProvider=sa({name:`Tabs`,gate:!1,init:()=>{'
+    'let se={addSessionTab:entry=>entry,select(entry){return entry}};'
+    'return{...se,store:[]}}});'
+)
+BODY = ('const FACTORY = ' + discovery.FACTORY_TEXT + ';\n' + TABS_PROVIDER + '\n').encode()
 BUNDLE = 'out/renderer/assets/main-ABC123XY.js'
 
 
@@ -179,6 +184,27 @@ class InstallCycleTests(unittest.TestCase):
         self.assertEqual((self.plugin / 'index.ts').stat().st_mtime_ns, before,
                          'an identical plugin must not be rewritten')
 
+    def test_the_install_record_carries_plugin_digests_for_later_upgrades(self):
+        self.install()
+        record = json.loads((self.build / 'installed.json').read_text())
+        self.assertEqual(set(record['pluginDigests']), set(patch.PLUGIN_FILES))
+        for name in patch.PLUGIN_FILES:
+            self.assertEqual(record['pluginDigests'][name],
+                             patch.digest((self.paths['source'] / name).read_bytes()), name)
+
+    def test_a_plugin_only_change_updates_files_without_rewriting_the_archive(self):
+        self.install()
+        installed_app = self.app.read_bytes()
+        (self.paths['source'] / 'index.ts').write_bytes(b'// revised plugin source\n')
+        result = patch.install(check_closed=False, **self.paths)
+        self.assertEqual(result, {'status': 'installed'})
+        self.assertEqual(self.app.read_bytes(), installed_app,
+                         'a plugin-only change must not rewrite app.asar')
+        self.assertTrue(patch._fully_installed(self.paths['source'], self.plugin))
+        record = json.loads((self.build / 'installed.json').read_text())
+        self.assertEqual(record['pluginDigests']['index.ts'],
+                         patch.digest((self.paths['source'] / 'index.ts').read_bytes()))
+
     def test_upgrade_replaces_a_previous_patch_without_a_rollback(self):
         """A second, different build installs over the first using the recorded backup."""
         self.stage()
@@ -253,7 +279,10 @@ class InstallCycleTests(unittest.TestCase):
                                source=self.paths['source'], build=self.build)
         self.assertEqual(manifest['version'], '2.1.4')
         staged = patch.Asar(self.base / 'newer-out.asar')
-        self.assertIn(discovery.WRAPPER, staged.read(BUNDLE).decode())
+        staged_source = staged.read(BUNDLE).decode()
+        self.assertIn(discovery.WRAPPER, staged_source)
+        self.assertIn(f'window.{discovery.SESSION_OPENER_BRIDGE}=(session,options)=>', staged_source)
+        self.assertIn('se.addSessionTab({server:options.server,sessionId:session.id})', staged_source)
 
     def test_verify_reports_compatibility_without_writing_anything(self):
         before = self.app.read_bytes()

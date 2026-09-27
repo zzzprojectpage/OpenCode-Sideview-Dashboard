@@ -12,6 +12,7 @@ literals.
 import re
 
 WRAPPER = '__localTelemetryAttach'
+SESSION_OPENER_BRIDGE = '__localTelemetryOpenSession'
 # A real minified client factory, kept as a worked example for tests and documentation.
 FACTORY_TEXT = (
     'function TI(e){return CI({baseUrl:e.server.url,fetch:e.fetch,'
@@ -218,6 +219,50 @@ def patch_client_factory(text):
         raise UnsupportedBuild('The client factory return value is not the expected client call.')
     patched_body = f'{opening.group(1)}return{opening.group(2)}{WRAPPER}({expression}){tail}'
     return PatchResult(text[:factory.body_open + 1] + patched_body + text[factory.body_close:], factory)
+
+
+TABS_PROVIDER_RE = re.compile(r'\bsa\(\{name:`Tabs`,gate:!1,init:\(\)=>\{')
+TABS_RETURN_RE = re.compile(r'\breturn\s*\{\.\.\.([A-Za-z_$][\w$]*),store\s*:')
+
+
+def expose_tabs_session_opener(text):
+    """Register a session-tab opener when OpenCode initializes its Tabs provider.
+
+    The session.open action belongs to a route-specific provider and may not exist
+    while the sidebar is mounted on a session screen. The Tabs provider owns the
+    shared add/select operations, so install the bridge there instead.
+    """
+    if SESSION_OPENER_BRIDGE in text:
+        raise UnsupportedBuild('The OpenCode Tabs session bridge is already present.')
+    matches = list(TABS_PROVIDER_RE.finditer(text))
+    if not matches:
+        raise UnsupportedBuild(
+            'Could not find OpenCode\'s shared Tabs provider for session navigation.')
+    if len(matches) > 1:
+        raise UnsupportedBuild(
+            f'Found {len(matches)} candidate Tabs providers; refusing to guess which to expose.')
+    provider = matches[0]
+    body_open = provider.end() - 1
+    body_close = find_function_end(text, body_open)
+    if body_close is None:
+        raise UnsupportedBuild('The OpenCode Tabs provider body could not be scanned to its end.')
+    body = text[body_open + 1:body_close]
+    returns = list(TABS_RETURN_RE.finditer(body))
+    if len(returns) != 1:
+        raise UnsupportedBuild(
+            f'Expected one Tabs state return object, found {len(returns)}; refusing to guess.')
+    tabs = returns[0].group(1)
+    if not re.search(r'\baddSessionTab\s*:', body) or not re.search(r'\bselect\s*(?:\(|:)', body):
+        raise UnsupportedBuild('The Tabs provider does not expose addSessionTab and select actions.')
+    insertion = body_open + 1 + returns[0].start()
+    bridge = (
+        f'window.{SESSION_OPENER_BRIDGE}=(session,options)=>{{'
+        f'if(!session?.id||!options?.server)return false;'
+        f'let tab={tabs}.addSessionTab({{server:options.server,sessionId:session.id}});'
+        f'if(!tab||tab.type!==`session`)return false;'
+        f'{tabs}.select(tab);return true}};'
+    )
+    return text[:insertion] + bridge + text[insertion:]
 
 
 class Bundle:

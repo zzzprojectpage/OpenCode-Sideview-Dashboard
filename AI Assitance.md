@@ -18,6 +18,11 @@ Two independent halves must both work. Test them separately, because they fail d
 The session metrics (context, cost, speed, cache, MCPs, model share) come from the renderer
 half alone. Only the cap sections need the plugin. That split tells you which half broke.
 
+The **Search** panel (1.1.0) spans both halves: the renderer owns the button, panel and
+navigation; the server plugin owns the database read. It fails in its own way: an old
+renderer has no button at all, and an old (or not restarted) plugin makes searches answer
+`Search failed.`
+
 ## Invariants
 
 1. **Never delete.** Unwanted files move aside to a uniquely named folder. `_stash()` guarantees this.
@@ -30,6 +35,8 @@ half alone. Only the cap sections need the plugin. That split tells you which ha
    not installed for a fresh user.
 7. **Never touch `build/`, `backups/` or `__pycache__/`** while packaging or cleaning up: they hold
    install state, not release content. `build_release.py` enforces this with a `PROTECTED` set.
+8. **Search never writes.** The database is opened read-only, a test proves the connection refuses
+   writes, and reasoning/tool content is never searched or returned.
 
 ## Where state lives
 
@@ -59,7 +66,10 @@ on the next run; `py patch_desktop.py migrate` does it on demand.
    factory, wrap the factory, bundle three ES modules, write `build/app.asar`, then verify
    every entry.
 3. Back up the original to `backups/<sha256-of-original>/app.asar`.
-4. `install_plugin()` — copy `index.ts`, `package.json`, `src/quota.mjs` into the plugin folder.
+4. `install_plugin()` — copy the files in `PLUGIN_FILES` (`index.ts`, `package.json`,
+   `src/quota.mjs`, `src/search.mjs`) into the plugin folder. Files a previous install recorded
+   in `installed.json` (or the 1.0.0 release, recognised by its digests) are upgraded in place;
+   any other file with one of those names is refused, never overwritten.
 5. Atomically replace `app.asar`.
 6. Write `build/installed.json`, the record `rollback` needs.
 
@@ -124,7 +134,34 @@ The server plugin half failed.
 6. **A `Stale` label is normal after a failed refresh.** The last good reading stays on screen.
    It clears on the next successful refresh (at most once a minute).
 
-### 5. A provider is missing its cap section
+### 5. Search says "Search failed." or returns nothing
+
+The search half is the renderer button plus the plugin's `search` method.
+
+1. **Old plugin.** The panel message names it: the running server has no `search` method yet.
+   Restart OpenCode after installing; the plugin loads once per server start.
+2. **Sanity-check the database itself**, bypassing the app and the plugin:
+   `node verification/search_live.mjs telemetry` reads the real database read-only with the
+   shipping core and prints results and timings.
+3. **Wrong database.** The plugin uses `$OPENCODE_DB` when set, else
+   `~/.local/share/opencode/opencode.db`. A search that returns nothing for known text usually
+   means the app is writing a different file.
+4. **Old rows only.** Searches read `session_v2`/`session_message`, the current V2 store. A
+   session that exists only in the legacy `message`/`part` tables (pre-migration) is invisible
+   until the app migrates it.
+5. **Clicking a hit says the session-tab integration is missing.** Re-run `Install-Sidebar.cmd`
+   from this project, then fully quit and restart OpenCode. The desktop patch registers the
+   opener with OpenCode's shared Tabs provider; it must add and select the tab, not only change
+   the URL. If the message remains, run `Verify-Compatibility.cmd` and report its output and
+   the OpenCode version.
+6. **A session tab opens but stays blank.** The route encodes server keys, while the Tabs store
+   expects OpenCode's raw server key. Decode the route segment before adding the tab; otherwise
+   the session view cannot resolve its server context. Reinstall after updating the project.
+7. **Slow searches are bounded.** A term that matches nothing scans every session and stops at
+   the 8-second budget; the panel then says *older history not fully scanned*. Typing aborts the
+   previous search first.
+
+### 6. A provider is missing its cap section
 
 Caps are a fixed list, not a discovery mechanism. `index.ts` defines `PROVIDERS`, and
 `USAGE_URLS` maps each to its endpoint; `src/quota.mjs` normalises each response shape. Adding
@@ -132,7 +169,7 @@ a provider means editing all three. Most API-key providers are pay-per-token and
 at all — do not fabricate one. Balance or spend is the honest substitute where the provider
 offers it.
 
-### 6. The per-model split is missing
+### 7. The per-model split is missing
 
 It only appears for OpenCode Go, and only when all of these hold:
 
@@ -144,12 +181,12 @@ It only appears for OpenCode Go, and only when all of these hold:
 If every Go model has zero cost, the split cannot be apportioned and the panel says so instead
 of showing percentages.
 
-### 7. The sidebar vanished after an OpenCode update
+### 8. The sidebar vanished after an OpenCode update
 
 Expected. An update replaces `app.asar`. Run `Install-Sidebar.cmd` again; it upgrades in place
 from the pristine backup.
 
-### 8. Tests fail
+### 9. Tests fail
 
 ```
 node --test tests/*.test.mjs
@@ -169,13 +206,16 @@ Platform notes that have bitten this project before:
 
 ## Verifying a change
 
-Run all three before claiming a fix:
+Run all four before claiming a fix:
 
 1. `node --test tests/*.test.mjs` and `py -m unittest discover -s tests -p "test_*.py"`.
-2. `py verification/simulate_fresh_download.py` — proves a clean checkout installs and rolls back
+2. `py tests/verify_ui.py` — drives the real sidebar module in a headless browser against
+   synthetic data (serve the folder on 8768 first).
+3. `node verification/search_live.mjs` — runs the shipping search core against the real database,
+   read-only; checks the schema assumptions end to end.
+4. `py verification/simulate_fresh_download.py` — proves a clean checkout installs and rolls back
    with no manual staging, against a pristine archive. This is the gate that matters most: it
    reproduces what a GitHub downloader experiences.
-3. `py patch_desktop.py verify` against the real installation.
 
 A change to the patch mechanics is not verified until the fresh-download simulation passes,
 because a working install on a development machine hides staging assumptions.
@@ -189,15 +229,18 @@ because a working install on a development machine hides staging assumptions.
 | Which plugins are active? | `opencode api get "/api/plugin?location%5Bdirectory%5D=<dir>"` |
 | Is a session bound? | the panel's bottom diagnostics line |
 | Is the archive patched? | `py patch_desktop.py verify`, or grep the bundle for `__localTelemetryAttach` |
-| What did install do? | `build/installed.json` and the printed stage summary |
+| Does search work outside the app? | `node verification/search_live.mjs <term>` |
+| What was upgraded? | `build/installed.json` (`pluginDigests`) and the printed stage summary |
 
 ## Files
 
 ```
 patch_desktop.py     install / stage / rollback / verify; owns the ASAR read-write
 discovery.py         finds the bundle and client factory by shape; owns the JS scanner
-index.ts             server plugin: credentials -> provider usage -> percentages over RPC
-src/sidebar.mjs      panel UI, client hook, rendering, refresh loop
+index.ts             server plugin: credentials -> provider usage -> percentages over RPC;
+                     search -> read-only SQLite query over session history
+src/sidebar.mjs      panel UI, client hook, rendering, refresh loop, search panel + navigation
+src/search.mjs       search core: query shape, text extraction, snippets, session walk
 src/metrics.mjs      session metrics from messages
 src/attribution.mjs  per-model split of a Go cap window
 src/quota.mjs        normalises each provider's usage response

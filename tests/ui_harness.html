@@ -7,13 +7,40 @@ import {attachClient} from '/src/sidebar.mjs';
 const params=new URLSearchParams(location.search);
 const ms=Number(params.get('ms')||0);
 history.replaceState(null,'','/');
-window.fail=false;window.rpcCalls=0;
+window.fail=false;window.rpcCalls=0;window.searchCalls=[];window.popstateRoutes=[];window.openedSessions=[];window.openTabs=new Set(['ses_test']);
+window.addEventListener('popstate',()=>window.popstateRoutes.push(location.pathname));
+window.openedServerKeys=[];window.__localTelemetryOpenSession=(session,options)=>{if(!session?.id||!options?.server)return false;window.openedSessions.push(session.id);window.openedServerKeys.push(options.server);window.openTabs.add(session.id);const bytes=new TextEncoder().encode(options.server);let binary='';for(const byte of bytes)binary+=String.fromCharCode(byte);const routeKey=btoa(binary).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');const path=`/server/${routeKey}/session/${session.id}`;history.pushState(null,'',path);window.dispatchEvent(new PopStateEvent('popstate',{state:history.state}));return true};
 const message={id:'a',type:'assistant',model:{providerID:'openai',id:'Test model'},time:{created:1000,streamed:2000,completed:4000},tokens:{input:100,output:40,reasoning:10,cache:{read:300,write:100}},content:[{type:'tool',name:'context7_query-docs'}]};
 // ?ms=<generation milliseconds> pins the generation window so the displayed speed is
 // deterministic. Values that divide the token count evenly keep assertions free of
 // locale-specific decimal separators.
 if(ms>0)message.time.completed=message.time.streamed+ms;
-const client={session:{get:async()=>{if(window.fail)throw Error('offline');return {location:{directory:'test'},cost:0.29576529}},context:async()=>[message],stats:async()=>({models:[{model:{providerID:'opencode-go',id:'deepseek-v4.1-flash'},cost:0.75,tokens:{input:100,output:10,reasoning:0,cache:{read:27137922,write:0}}},{model:{providerID:'opencode-go',id:'space-bunny-free'},cost:0,steps:21,tokens:{input:892804}},{model:{providerID:'google',id:'gemini-3.8-flash'},cost:9,tokens:{input:50}}]}),message:{get:async()=>message}},message:{list:async()=>({data:[message]})},model:{list:async()=>({data:[{providerID:'openai',id:'Test model',limit:{context:1000}}]})},mcp:{list:async()=>({data:[{name:'context7',status:{type:'connected'}}]})},rpc:()=>({snapshot:async()=>{window.rpcCalls++;return {providers:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:25,remaining:75,reset:new Date(Date.now()+2*3600*1000).toISOString()},weekly:null,monthly:null}}]}}})};
+const searchHits=[
+  {sessionID:'ses_hit1',messageID:'msg_h1',role:'user',title:'Notes on rate limits',directory:'C:/work/proxy',time:1759000000000,snippet:'please add rate limit handling',context:'please add rate limit handling to the proxy'},
+  {sessionID:'ses_hit2',messageID:'msg_h2',role:'assistant',title:'Chart colours',directory:'C:/work/charts',time:1759000000000,snippet:'use <b>50%</b> shading',context:'use <b>50%</b> shading for the bars'}
+];
+const client={
+  session:{
+    get:async({sessionID}={})=>{if(window.fail)throw Error('offline');if(window.openDelay)await new Promise(resolve=>setTimeout(resolve,window.openDelay));return {id:sessionID||'ses_test',location:{directory:'test'},cost:0.29576529}},
+    list:async()=>({data:[{location:{directory:'test'}}]}),
+    context:async()=>[message],
+    stats:async()=>({models:[{model:{providerID:'opencode-go',id:'deepseek-v4.1-flash'},cost:0.75,tokens:{input:100,output:10,reasoning:0,cache:{read:27137922,write:0}}},{model:{providerID:'opencode-go',id:'space-bunny-free'},cost:0,steps:21,tokens:{input:892804}},{model:{providerID:'google',id:'gemini-3.8-flash'},cost:9,tokens:{input:50}}]}),
+    message:{get:async()=>message},
+  },
+  message:{list:async()=>({data:[message]})},
+  model:{list:async()=>({data:[{providerID:'openai',id:'Test model',limit:{context:1000}}]})},
+  mcp:{list:async()=>({data:[{name:'context7',status:{type:'connected'}}]})},
+  rpc:()=>({
+    snapshot:async()=>{window.rpcCalls++;return {providers:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:25,remaining:75,reset:new Date(Date.now()+2*3600*1000).toISOString()},weekly:null,monthly:null}}]}},
+    search:async(input)=>{
+      window.searchCalls.push(input);
+      const q=(input&&input.query||'').toLowerCase();
+      const hits=q==='__many__'?Array.from({length:67},(_,i)=>({sessionID:`ses_many_${i}`,messageID:`msg_many_${i}`,role:i%2?'assistant':'user',title:`Session result ${i+1}`,directory:`C:/work/project-${i}`,time:1759000000000,snippet:`A detailed result snippet that stays readable while showing item number ${i+1}.`,context:`Full context for result ${i+1}`})):searchHits.filter(hit=>!q||hit.title.toLowerCase().includes(q)||hit.snippet.toLowerCase().includes(q));
+      const page=Number(input.page)||1,limit=Number(input.limit)||30,start=(page-1)*limit;
+      return {results:hits.slice(start,start+limit),hasMore:hits.length>start+limit,scanned:hits.length,total:hits.length,truncated:false,engine:'test'};
+    },
+  }),
+};
 attachClient(client).session.get({sessionID:'ses_test'});
 attachClient(client).message.list({sessionID:'ses_test'});
 </script></body></html>

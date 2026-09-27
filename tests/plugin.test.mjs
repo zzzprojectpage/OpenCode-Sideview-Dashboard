@@ -1,11 +1,14 @@
-// Behavioural tests for the quota plugin, run against a fake plugin context.
-// Node imports the .ts source directly, so these test the shipping file.
+// Behavioural tests for the quota plugin and the history-search RPC, run against a
+// fake plugin context. Node imports the .ts source directly, so these test the
+// shipping file.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {dirname, join} from 'node:path';
-import plugin from '../index.ts';
+import {tmpdir} from 'node:os';
+import plugin, {databasePath} from '../index.ts';
+import {buildSearchFixture} from './fixture-db.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const source = readFileSync(join(here, '..', 'index.ts'), 'utf8');
@@ -174,4 +177,69 @@ test('the ChatGPT account id is sent when the token carries one', async () => {
   await (await handlerFor(fakeContext({credential: {type: 'oauth', access: token}})))({});
   const openaiCall = calls.find(call => call.url.includes('chatgpt.com'));
   assert.equal(openaiCall.init.headers['ChatGPT-Account-Id'], 'acct_9');
+});
+
+test('the contract exposes search next to snapshot', async () => {
+  const context = fakeContext();
+  await plugin.setup(context);
+  const {contract, handlers} = context.registered[0];
+  assert.equal(contract.id, 'local.telemetry');
+  assert.ok(contract.methods.search.input, 'the search input schema is required by the RPC runtime');
+  assert.deepEqual(contract.methods.search.input.required, ['query']);
+  assert.equal(contract.methods.search.input.additionalProperties, false);
+  assert.equal(contract.methods.search.input.properties.page.type, 'number');
+  assert.ok(contract.methods.search.output);
+  assert.equal(typeof handlers.search, 'function');
+});
+
+test('the database path honours OPENCODE_DB and otherwise uses the standard location', () => {
+  assert.equal(databasePath({OPENCODE_DB: 'C:/custom/opencode.db'}), 'C:/custom/opencode.db');
+  assert.match(databasePath({}), /opencode\.db$/);
+});
+
+test('search reads the database named by OPENCODE_DB and reports its engine', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'telemetry-plugin-search-'));
+  const dbPath = join(dir, 'opencode.db');
+  buildSearchFixture(dbPath);
+  const previous = process.env.OPENCODE_DB;
+  process.env.OPENCODE_DB = dbPath;
+  try {
+    const context = fakeContext();
+    await plugin.setup(context);
+    const search = context.registered[0].handlers.search;
+
+    const response = await search({query: 'rate limit', roles: ['user', 'assistant'], limit: 10});
+    assert.equal(response.engine, 'node:sqlite');
+    assert.equal(response.error, undefined);
+    assert.ok(response.results.length >= 3, JSON.stringify(response));
+    assert.ok(response.results.every(item => item.sessionID && item.messageID && typeof item.snippet === 'string'));
+    assert.ok(response.results.some(item => item.role === 'user'));
+    assert.ok(response.results.some(item => item.role === 'assistant'));
+    assert.equal(response.scanned, 2);
+    assert.equal(response.total, 2);
+
+    const missing = await search({query: 'zzz_absent_zzz'});
+    assert.equal(missing.error, undefined);
+    assert.deepEqual(missing.results, []);
+    assert.equal(missing.truncated, false);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_DB;
+    else process.env.OPENCODE_DB = previous;
+    rmSync(dir, {recursive: true, force: true});
+  }
+});
+
+test('search reports an honest error for a database that does not exist', async () => {
+  const previous = process.env.OPENCODE_DB;
+  process.env.OPENCODE_DB = join(tmpdir(), 'telemetry-missing-db', 'opencode.db');
+  try {
+    const context = fakeContext();
+    await plugin.setup(context);
+    const response = await context.registered[0].handlers.search({query: 'x'});
+    assert.deepEqual(response.results, []);
+    assert.match(response.error, /not found/);
+  } finally {
+    if (previous === undefined) delete process.env.OPENCODE_DB;
+    else process.env.OPENCODE_DB = previous;
+  }
 });

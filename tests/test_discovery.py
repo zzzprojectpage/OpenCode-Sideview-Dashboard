@@ -10,6 +10,11 @@ REAL_FACTORY = (
     'function TI(e){return CI({baseUrl:e.server.url,fetch:e.fetch,'
     'headers:e.server.password?{Authorization:`Basic ${wI({password:e.server.password})}`}:void 0})}'
 )
+TABS_PROVIDER = (
+    'var tabsProvider=sa({name:`Tabs`,gate:!1,init:()=>{'
+    'let tabs={addSessionTab:entry=>entry,select(entry){return entry}};'
+    'return{...tabs,store:[]}}});'
+)
 
 
 class FindFunctionEndTests(unittest.TestCase):
@@ -116,6 +121,23 @@ class PatchFactoryTests(unittest.TestCase):
         result = discovery.patch_client_factory(bundle)
         self.assertTrue(result.text.startswith('var head=1;function TI(e){return __localTelemetryAttach('))
         self.assertTrue(result.text.endswith(';var tail=2;'))
+
+
+class ExposeSessionOpenerTests(unittest.TestCase):
+    def test_session_bridge_is_available_from_the_always_mounted_tabs_provider(self):
+        result = discovery.expose_tabs_session_opener('head;' + TABS_PROVIDER + ';tail;')
+        self.assertIn('name:`Tabs`,gate:!1', result)
+        self.assertIn('window.__localTelemetryOpenSession=(session,options)=>{', result)
+        self.assertIn('tabs.addSessionTab({server:options.server,sessionId:session.id})', result)
+        self.assertIn('tabs.select(tab)', result)
+        self.assertLess(result.index('window.__localTelemetryOpenSession='), result.index('return{...tabs'))
+        self.assertTrue(result.endswith(';tail;'))
+
+    def test_refuses_a_bundle_without_one_unambiguous_session_opener(self):
+        with self.assertRaisesRegex(discovery.UnsupportedBuild, 'Tabs provider'):
+            discovery.expose_tabs_session_opener('function unrelated(){return 1}')
+        with self.assertRaisesRegex(discovery.UnsupportedBuild, '2 candidate Tabs'):
+            discovery.expose_tabs_session_opener(TABS_PROVIDER + TABS_PROVIDER)
 
 
 if __name__ == '__main__':

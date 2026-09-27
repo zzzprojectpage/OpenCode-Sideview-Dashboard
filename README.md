@@ -10,12 +10,35 @@ A right-hand sidebar for the **OpenCode desktop app** showing live session telem
 - **OpenCode Go and OpenAI subscription caps** — 5-hour, weekly and monthly, as used/remaining percent with reset times
 - **Estimated per-model share** of each OpenCode Go cap window
 - **Model token share** inside the active context
+- **History search** — a Search button beside Telemetry that finds text in every session
+  (user prompts and agent replies) and opens any hit as an additional session tab
 
 ![Context, cost, speed, cache and MCP usage](docs/screenshots/01-context-cost-speed-cache.png)
 
 ![OpenCode Go caps with the estimated per-model split](docs/screenshots/02-go-caps-per-model.png)
 
 ![OpenAI caps, model token share and the diagnostics line](docs/screenshots/03-openai-monthly-and-models.png)
+
+---
+
+## Search
+
+The **Search** button next to **Telemetry** searches the text of every session in your local
+database — user prompts and agent replies, never reasoning or tool calls. Each hit shows the
+session title, folder, time and a highlighted snippet; clicking it opens that session as a new
+tab, leaving your currently open sessions untouched.
+
+- An empty query lists the most recent messages.
+- **User** / **Agent** toggle which roles are searched (both are on by default).
+- The dropdown sets results per page (20–100); numbered pages and next/previous controls reach
+  later matches without loading the entire database up front.
+- Typing again aborts the previous search; a term that matches nothing is bounded by an
+  8-second budget, and the panel says so when older history was not fully scanned.
+- Hover a result for a wider context window. Nothing is written to the database.
+
+Search reads the current V2 store (`session_v2` / `session_message`) read-only, with whichever
+SQLite driver the server ships. It needs the server half of this project, so an install that
+predates 1.1.0 answers `Search failed.` until OpenCode is restarted after the update.
 
 ---
 
@@ -40,8 +63,13 @@ py --version
 2. Double-click **`Install-Sidebar.cmd`**.
 3. Start OpenCode and open any session.
 
-You should see a **Telemetry** button at the bottom-right. The sidebar is open by default;
-click the button (or press `Escape` while it has focus) to collapse it.
+You should see a **Telemetry** button at the bottom-right, with a **Search** button next to it.
+The sidebar is open by default; click the button (or press `Escape` while it has focus) to
+collapse it.
+
+Running the installer again **upgrades both halves in place**: the archive is rebuilt from the
+pristine backup, and the server plugin files are updated (files a previous install wrote are
+recognised, so nothing needs to be deleted first).
 
 To check compatibility before installing anything, run **`Verify-Compatibility.cmd`**.
 
@@ -75,6 +103,8 @@ This project makes two changes, both reversible:
    OpenCode Go and OpenAI credentials *inside the OpenCode server process*, calls each
    provider's own usage endpoint, and returns **only percentages and reset times** over a
    local RPC. Credentials never reach the UI, and are never written to disk by this project.
+   The same plugin answers the sidebar's history search: it opens the local SQLite database
+   read-only and returns matched message text and location fields. It never writes.
 
 The patcher is **not tied to one app version**: it discovers the renderer bundle and the
 client factory by shape, so a renamed function or a new bundle hash still works. It is last
@@ -181,7 +211,8 @@ py tests/verify_ui.py
 patch_desktop.py     stage / install / rollback / verify the archive patch
 discovery.py         finds the renderer bundle and client factory by shape
 index.ts             the server plugin: provider credentials -> usage percentages
-src/sidebar.mjs      the sidebar UI (context, cost, speed, cache, caps, splits)
+src/sidebar.mjs      the sidebar UI (context, cost, speed, cache, caps, splits, search)
+src/search.mjs       session-history search core (query shape, matching, snippets)
 src/metrics.mjs      session metrics from messages
 src/attribution.mjs  per-model split of a cap window
 src/quota.mjs        normalises each provider's usage response

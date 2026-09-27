@@ -1,8 +1,21 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {renderSnapshot, targetsFor, attachClient, debugState, formatRate} from '../src/sidebar.mjs';
+import {renderSnapshot, targetsFor, attachClient, debugState, formatRate,
+  base64url, fromBase64url, normalizeStoredServerKey, SIDECAR_KEY, routeServerKey,
+  highlightText, shortenDir, formatWhen, renderSearchResults} from '../src/sidebar.mjs';
 
 const enUS = new Intl.NumberFormat('en-US', {maximumFractionDigits: 1}).format;
+
+test('session tab bridge uses the raw server key, decoded from the route segment', () => {
+  assert.equal(base64url('sidecar'), 'c2lkZWNhcg');
+  assert.equal(fromBase64url('c2lkZWNhcg'), 'sidecar');
+  assert.equal(routeServerKey('/server/c2lkZWNhcg/session/ses_1'), 'sidecar');
+  assert.equal(routeServerKey('/server/aHR0cHM6Ly9leGFtcGxlLmNvbQ/session/ses_2'), 'https://example.com');
+  assert.equal(normalizeStoredServerKey('c2lkZWNhcg'), 'sidecar', 'migrates keys saved by the previous route-based bridge');
+  assert.equal(normalizeStoredServerKey('sidecar'), 'sidecar', 'does not decode an already-raw key');
+  assert.equal(routeServerKey('/settings'), null);
+  assert.equal(SIDECAR_KEY, 'sidecar');
+});
 
 test('token rate stays plain below 1000 and abbreviates in K then M', () => {
   assert.equal(formatRate(25, enUS), '25');
@@ -91,4 +104,35 @@ test('bind follows the last seen session even when the URL has no match',async()
   assert.equal(debugState().session,'ses_abc123');
   assert.equal(debugState().hooks.get>=1,true);
   delete globalThis.location;
+});
+
+test('search result text is escaped, with only the first match marked', () => {
+  assert.equal(highlightText('a <b> needle here', 'needle'), 'a &lt;b&gt; <mark>needle</mark> here');
+  assert.equal(highlightText('no match', 'needle'), 'no match');
+  assert.equal(highlightText('<img src=x>', ''), '&lt;img src=x&gt;');
+  const html = renderSearchResults([{
+    sessionID: 'ses_1', role: 'assistant', title: '<script>x</script>',
+    directory: 'C:/Users/someone/Documents/work/opencode-sidebar',
+    time: 0, snippet: 'the needle text', context: 'full context',
+  }], 'needle');
+  assert.ok(html.includes('&lt;script&gt;'));
+  assert.ok(!html.includes('<script>'));
+  assert.ok(html.includes('<mark>needle</mark>'));
+  assert.ok(html.includes('data-session="ses_1"'));
+  assert.ok(html.includes('agent'));
+  assert.ok(html.includes('…/work/opencode-sidebar'));
+});
+
+test('directory shortening keeps the tail of long paths', () => {
+  assert.equal(shortenDir('short/path'), 'short/path');
+  assert.equal(shortenDir('C:\\Users\\someone\\Documents\\work\\opencode-sidebar'),
+    '…/work/opencode-sidebar');
+  assert.equal(shortenDir('x'.repeat(60)).length, 43);
+});
+
+test('a missing time renders as nothing, never as a wrong date', () => {
+  assert.equal(formatWhen(0), '');
+  assert.equal(formatWhen(NaN), '');
+  assert.equal(formatWhen(undefined), '');
+  assert.notEqual(formatWhen(1759000000000), '');
 });

@@ -210,7 +210,8 @@ def verify(app=DEFAULT_APP):
     print(f'Bundle:   {bundle.key}')
     print(f'Factory:  function {factory.name}({factory.parameter}) returning {factory.inner}(...)')
     patched = discovery.patch_client_factory(bundle.text)
-    print(f'Patched:  wrapper inserts cleanly, {len(patched.text) - len(bundle.text)} bytes added')
+    bridged = discovery.expose_tabs_session_opener(patched.text)
+    print(f'Patched:  client hook + shared Tabs bridge, {len(bridged) - len(bundle.text)} bytes added')
     print(f'Tested:   {TESTED_VERSION} (this build is {version})')
     print('Compatible. Run Install-Sidebar.cmd to apply.')
     return {'version': version, 'bundle': bundle.key, 'factory': factory.name, 'patched': False}
@@ -246,7 +247,8 @@ def stage(app=DEFAULT_APP, output=None, source=None, build=None):
     if version != TESTED_VERSION:
         print(f'Note: OpenCode {version} is untested here (verified against {TESTED_VERSION}); '
               f'the client factory was found, so the patch is expected to work.')
-    main = IMPORT_LINE + discovery.patch_client_factory(bundle.text).text
+    main = IMPORT_LINE + discovery.expose_tabs_session_opener(
+        discovery.patch_client_factory(bundle.text).text)
     changes = {bundle.key: main.encode()}
     for name in RENDERER_FILES:
         changes[f'{RENDERER_PREFIX}{name}'] = (source/'src'/name).read_bytes()
@@ -277,9 +279,22 @@ class PluginConflict(ValueError):
     """The plugin directory holds files we did not write; refuse to clobber it."""
 
 
-PLUGIN_FILES = ['index.ts', 'package.json', 'src/quota.mjs']
+PLUGIN_FILES = ['index.ts', 'package.json', 'src/quota.mjs', 'src/search.mjs']
 # Renderer-side modules bundled into the archive; the tests build their fake source from this list.
 RENDERER_FILES = ['sidebar.mjs', 'metrics.mjs', 'attribution.mjs']
+# Digests of plugin files written by the 1.0.0 release, before installs recorded their own
+# plugin digests. A file matching one of these is ours to upgrade, never a user's own plugin.
+# New installs record digests in installed.json instead, so this list is a one-time migration.
+LEGACY_PLUGIN_DIGESTS = {
+    '184f7da89e270efc287c321297e8403fa3ede96b084811ac8a478ba0d4a628b7',  # index.ts 1.0.0
+    '10abfec6026f0bd2b8915bd36280931ada1e5a253721c49ad2b8e3be78453faf',  # package.json 1.0.0
+}
+
+
+def plugin_digests(source=ROOT):
+    """Digests of everything this project owns in the plugin directory."""
+    source = Path(source)
+    return {name: digest((source / name).read_bytes()) for name in PLUGIN_FILES}
 
 
 def _matches_source(source, plugin, name):
@@ -303,25 +318,37 @@ def _stash(directory, into):
     return destination
 
 
-def install_plugin(source=ROOT, plugin=None, cleanup_into=None, fail_after_files=None):
+def install_plugin(source=ROOT, plugin=None, cleanup_into=None, fail_after_files=None, recorded=None):
     """Install the server plugin files. Never deletes anything; only fills gaps or moves aside.
 
-    Returns {'status': 'installed' | 'already-installed'}. Raises PluginConflict when the
-    directory holds files we did not write, so a user's own plugin is never overwritten.
+    Returns {'status': 'installed' | 'upgraded' | 'already-installed'}. Raises PluginConflict
+    when the directory holds files we did not write, so a user's own plugin is never
+    overwritten. `recorded` maps file names to the digests a previous install wrote, and a
+    file matching it (or one of the 1.0.0 legacy digests) is ours to upgrade in place.
     On a partial failure the incomplete directory is moved aside so a retry starts clean.
     """
     source = Path(source)
     plugin = Path(plugin) if plugin else Path.home() / '.config/opencode/plugins/local-telemetry'
     cleanup_into = Path(cleanup_into) if cleanup_into else plugin.parent / 'plugin-install-failed'
+    recorded = dict(recorded or {})
     try:
+        before = {}
         if plugin.exists():
             present = [name for name in PLUGIN_FILES if (plugin / name).exists()]
-            mismatched = [name for name in present if not _matches_source(source, plugin, name)]
-            if mismatched:
+
+            def is_ours(name):
+                if _matches_source(source, plugin, name):
+                    return True
+                installed = digest((plugin / name).read_bytes())
+                return recorded.get(name) == installed or installed in LEGACY_PLUGIN_DIGESTS
+
+            foreign = [name for name in present if not is_ours(name)]
+            if foreign:
                 raise PluginConflict(
-                    'Telemetry plugin directory has files we did not write: ' + ', '.join(mismatched)
+                    'Telemetry plugin directory has files we did not write: ' + ', '.join(foreign)
                     + f'. Move {plugin} aside, then run this again. No files were changed.')
-            if len(present) == len(PLUGIN_FILES):
+            before = {name: digest((plugin / name).read_bytes()) for name in present}
+            if len(present) == len(PLUGIN_FILES) and all(_matches_source(source, plugin, name) for name in PLUGIN_FILES):
                 return {'status': 'already-installed', 'plugin': str(plugin)}
         for written, name in enumerate(PLUGIN_FILES, start=1):
             target = plugin / name
@@ -329,7 +356,8 @@ def install_plugin(source=ROOT, plugin=None, cleanup_into=None, fail_after_files
             shutil.copy2(source / name, target)
             if fail_after_files is not None and written >= fail_after_files:
                 raise RuntimeError(f'simulated failure after writing {written} file(s)')
-        return {'status': 'installed', 'plugin': str(plugin)}
+        upgraded = any(before.get(name) != digest((source / name).read_bytes()) for name in before)
+        return {'status': 'upgraded' if upgraded else 'installed', 'plugin': str(plugin)}
     except PluginConflict:
         raise
     except Exception:
@@ -384,10 +412,6 @@ def install(app=DEFAULT_APP, staged=None, build=None, backups=None, plugin=None,
     saved = backup/'app.asar'
     app_digest = digest(app.read_bytes())
     backup_is_original = saved.is_file() and digest(saved.read_bytes()) == manifest['original']
-    if app_digest == manifest['patched'] and backup_is_original:
-        result = install_plugin(source=source, plugin=plugin, cleanup_into=backup/'plugin-install-failed')
-        print(f"Already installed ({result['status']}). Nothing to change.")
-        return {'status': 'already-installed'}
     # An app carrying a build we installed earlier may be upgraded in place, because the
     # pristine original is still on disk. Anything else is refused.
     record_file = build/'installed.json'
@@ -397,6 +421,19 @@ def install(app=DEFAULT_APP, staged=None, build=None, backups=None, plugin=None,
             recorded = json.loads(record_file.read_text())
         except (OSError, ValueError):
             recorded = None
+    recorded_plugin = (recorded or {}).get('pluginDigests') or {}
+    if app_digest == manifest['patched'] and backup_is_original:
+        # The archive is already current; only the plugin files can still need an update.
+        result = install_plugin(source=source, plugin=plugin, cleanup_into=backup/'plugin-install-failed',
+                                recorded=recorded_plugin)
+        if result['status'] == 'already-installed':
+            print(f"Already installed ({result['status']}). Nothing to change.")
+            return {'status': 'already-installed'}
+        (build/'installed.json').write_text(json.dumps(
+            {**manifest,'app':str(app),'backup':str(saved),'plugin':str(plugin),
+             'pluginDigests':plugin_digests(source)},indent=2))
+        print(f"Plugin {result['status']}; desktop archive already current.")
+        return {'status': 'installed'}
     upgrading = bool(recorded) and app_digest == recorded.get('patched') and backup_is_original
     if app_digest != manifest['original'] and not (upgrading or app_digest == manifest['patched']):
         raise ValueError('Installed app changed since staging. Restage before installing.')
@@ -404,12 +441,16 @@ def install(app=DEFAULT_APP, staged=None, build=None, backups=None, plugin=None,
         shutil.copy2(app,saved)
     if digest(saved.read_bytes()) != manifest['original']:
         raise ValueError('Backup verification failed')
-    result = install_plugin(source=source, plugin=plugin, cleanup_into=backup/'plugin-install-failed')
+    result = install_plugin(source=source, plugin=plugin, cleanup_into=backup/'plugin-install-failed',
+                            recorded=recorded_plugin)
     temp = app.with_suffix('.telemetry-staged')
     shutil.copy2(staged,temp)
     os.replace(temp,app)
-    (build/'installed.json').write_text(json.dumps({**manifest,'app':str(app),'backup':str(saved),'plugin':str(plugin)},indent=2))
-    print(f"Installed ({result['status']}{' as an upgrade' if upgrading else ''}). Original archive is backed up; launch OpenCode normally.")
+    (build/'installed.json').write_text(json.dumps(
+        {**manifest,'app':str(app),'backup':str(saved),'plugin':str(plugin),
+         'pluginDigests':plugin_digests(source)},indent=2))
+    label = 'upgraded' if upgrading else result['status']
+    print(f"Installed ({label}). Original archive is backed up; launch OpenCode normally.")
     return {'status': 'installed'}
 
 def rollback(app=None, plugin=None, build=None, backups=None, source=None, staged=None,
