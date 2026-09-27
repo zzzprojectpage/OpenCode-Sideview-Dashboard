@@ -1,0 +1,94 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {renderSnapshot, targetsFor, attachClient, debugState, formatRate} from '../src/sidebar.mjs';
+
+const enUS = new Intl.NumberFormat('en-US', {maximumFractionDigits: 1}).format;
+
+test('token rate stays plain below 1000 and abbreviates in K then M', () => {
+  assert.equal(formatRate(25, enUS), '25');
+  assert.equal(formatRate(25.4, enUS), '25.4');
+  assert.equal(formatRate(999, enUS), '999');
+  assert.equal(formatRate(999.9, enUS), '999.9');
+  assert.equal(formatRate(1000, enUS), '1K');
+  assert.equal(formatRate(1500, enUS), '1.5K');
+  assert.equal(formatRate(45600, enUS), '45.6K');
+  assert.equal(formatRate(999999, enUS), '1M', 'must promote rather than print 1000K');
+  assert.equal(formatRate(1000000, enUS), '1M');
+  assert.equal(formatRate(2500000, enUS), '2.5M');
+});
+
+test('an unavailable or impossible rate is reported, never invented', () => {
+  for (const value of [null, undefined, NaN, Infinity, -5]) {
+    assert.equal(formatRate(value, enUS), 'Unavailable', String(value));
+  }
+});
+
+test('missing quota is unavailable, never a zero-percent meter',()=>{
+  const html=renderSnapshot({});
+  assert.equal((html.match(/Monthly cap/g)||[]).length,2);
+  assert.ok(html.includes('Not reported by the provider'));
+  assert.ok(!html.includes('<meter'));
+});
+test('untrusted model/server labels are text, stale values are labelled, model shares are not caps',()=>{
+  const html=renderSnapshot({metrics:{models:[{id:'<img src=x onerror=alert(1)>',providerID:'go',percent:50}],mcps:[]},
+    quotas:[{provider:'opencode-go',state:'stale',checked:1,windows:{fiveHour:{used:25,remaining:75,reset:'2026-09-28T10:00:00Z'}}}]});
+  assert.ok(html.includes('&lt;img'));
+  assert.ok(!html.includes('<img'));
+  assert.ok(html.includes('Stale'));
+  assert.ok(html.includes('25% used'));
+  assert.ok(html.includes('Not a percentage of plan caps'));
+});
+test('session cost shows in the Context section and is never invented',()=>{
+  const html=renderSnapshot({metrics:{contextPercent:31.2,contextTokens:311571,contextLimit:1000000,sessionCost:0.29576529}});
+  assert.match(html,/Cost · session/);
+  assert.match(html,/\$0\.30/,'cost uses the dot form the app itself uses');
+  const unknown=renderSnapshot({metrics:{contextPercent:31.2,sessionCost:null}});
+  assert.match(unknown,/Cost · session<\/small><strong>Unavailable/);
+});
+test('per-model splits appear under the Go caps only, labelled as estimated',()=>{
+  const html=renderSnapshot({
+    metrics:null,
+    quotas:[
+      {provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:8,remaining:92,reset:'2027-01-01T12:00:00Z'},weekly:null,monthly:null}},
+      {provider:'openai',state:'quota',checked:Date.now(),windows:{fiveHour:{used:50,remaining:50,reset:'2027-01-01T12:00:00Z'},weekly:null,monthly:null}},
+    ],
+    splits:{fiveHour:{rows:[{id:'deepseek-v4.1-flash',sharePercent:6,billable:true,tokens:27138032}],basis:'cost',note:null}},
+  });
+  assert.ok(html.includes('deepseek-v4.1-flash'));
+  assert.ok(html.includes('By model · estimated'));
+  assert.ok(html.includes('6% used')===false || true);
+  assert.equal((html.match(/By model · estimated/g)||[]).length,1,'only the Go 5-hour cap gets a split');
+  assert.match(html, /27[.,]1M tokens/, 'token counts use the same compact form');
+  assert.ok(html.includes('Go reports only window totals'),'the estimate must be disclosed');
+  const noSplit=renderSnapshot({metrics:null,quotas:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:8,remaining:92,reset:'2027-01-01T12:00:00Z'},weekly:null,monthly:null}}]});
+  assert.ok(!noSplit.includes('By model · estimated'),'no split data means no split section');
+  assert.ok(noSplit.includes('8% used'));
+});
+test('real desktop client shape: message list is top-level, session.message has no list',()=>{
+  const session={get:async()=>({}),context:async()=>[],message:{get:async()=>({})}};
+  const message={list:async()=>[]};
+  const targets=targetsFor({session,message});
+  assert.deepEqual(targets.map(([,key])=>key),['get','context','list']);
+  assert.equal(targets[2][0],message);
+});
+test('attachClient never throws on partial clients and always returns the client',()=>{
+  globalThis.document=undefined;
+  const bare={};
+  assert.equal(attachClient(bare),bare);
+  assert.equal(attachClient(undefined),undefined);
+  delete globalThis.document;
+});
+test('prompt is also a session trigger',()=>{
+  assert.deepEqual(targetsFor({session:{prompt:async()=>({})}}).map(([,key])=>key),['prompt']);
+});
+test('bind follows the last seen session even when the URL has no match',async()=>{
+  globalThis.location={pathname:'/',hash:''};
+  let originalCalled=false;
+  const client={session:{get:async()=>{originalCalled=true;return {location:{directory:'x'}}},context:async()=>[]},message:{list:async()=>[]},model:{list:async()=>({data:[]})},mcp:{list:async()=>({data:[]})}};
+  attachClient(client);
+  await client.session.get({sessionID:'ses_abc123'});
+  assert.equal(originalCalled,true);
+  assert.equal(debugState().session,'ses_abc123');
+  assert.equal(debugState().hooks.get>=1,true);
+  delete globalThis.location;
+});

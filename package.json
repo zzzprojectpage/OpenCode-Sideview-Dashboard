@@ -1,0 +1,16 @@
+{
+  "name": "opencode-telemetry-sidebar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Session telemetry sidebar for the OpenCode desktop app: context, cost, speed, cache ratio, MCP usage and subscription caps.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:python": "py -m unittest discover -s tests -p \"test_*.py\"",
+    "test:ui": "py tests/verify_ui.py"
+  }
+}

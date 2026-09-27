@@ -1,0 +1,12 @@
+# Build output and the pristine backup of app.asar (large, machine-specific).
+build/
+backups/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

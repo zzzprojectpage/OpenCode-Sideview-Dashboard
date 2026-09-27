@@ -1,0 +1,19 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Telemetry test harness — synthetic data</title>
+<style>:root{--background-base:#151515;--text-base:#ededed;--text-weak:#aaa;--border-base:#444}body{margin:0;background:#151515;color:#ededed;font:14px system-ui}#root{height:100vh;box-sizing:border-box;padding:60px}#root textarea{width:90%;height:70px;margin-top:300px}</style>
+</head><body><div id="root"><h1>OpenCode telemetry — test harness</h1><p>Synthetic test data, not live account usage.</p><textarea aria-label="Message">Your conversation remains usable</textarea></div>
+<script type="module">
+import {attachClient} from '/src/sidebar.mjs';
+// Read display params before normalising the URL, which drops the query string.
+const params=new URLSearchParams(location.search);
+const ms=Number(params.get('ms')||0);
+history.replaceState(null,'','/');
+window.fail=false;window.rpcCalls=0;
+const message={id:'a',type:'assistant',model:{providerID:'openai',id:'Test model'},time:{created:1000,streamed:2000,completed:4000},tokens:{input:100,output:40,reasoning:10,cache:{read:300,write:100}},content:[{type:'tool',name:'context7_query-docs'}]};
+// ?ms=<generation milliseconds> pins the generation window so the displayed speed is
+// deterministic. Values that divide the token count evenly keep assertions free of
+// locale-specific decimal separators.
+if(ms>0)message.time.completed=message.time.streamed+ms;
+const client={session:{get:async()=>{if(window.fail)throw Error('offline');return {location:{directory:'test'},cost:0.29576529}},context:async()=>[message],stats:async()=>({models:[{model:{providerID:'opencode-go',id:'deepseek-v4.1-flash'},cost:0.75,tokens:{input:100,output:10,reasoning:0,cache:{read:27137922,write:0}}},{model:{providerID:'opencode-go',id:'space-bunny-free'},cost:0,steps:21,tokens:{input:892804}},{model:{providerID:'google',id:'gemini-3.8-flash'},cost:9,tokens:{input:50}}]}),message:{get:async()=>message}},message:{list:async()=>({data:[message]})},model:{list:async()=>({data:[{providerID:'openai',id:'Test model',limit:{context:1000}}]})},mcp:{list:async()=>({data:[{name:'context7',status:{type:'connected'}}]})},rpc:()=>({snapshot:async()=>{window.rpcCalls++;return {providers:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:25,remaining:75,reset:new Date(Date.now()+2*3600*1000).toISOString()},weekly:null,monthly:null}}]}}})};
+attachClient(client).session.get({sessionID:'ses_test'});
+attachClient(client).message.list({sessionID:'ses_test'});
+</script></body></html>
