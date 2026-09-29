@@ -24,6 +24,21 @@ with sync_playwright() as p:
     assert page.get_by_text('By model · estimated',exact=True).is_visible()
     assert page.get_by_text('space-bunny-free',exact=True).is_visible()
     assert page.get_by_text('gemini-3.8-flash',exact=True).count()==0,'non-Go models must not appear in the split'
+    # Anthropic gets its own section once the plugin reports it: 5-hour, weekly and the plan's
+    # Opus cap; the unreported Sonnet cap stays hidden and there is never a monthly row.
+    assert page.get_by_text('41% used',exact=True).is_visible()
+    assert page.get_by_text('13% used',exact=True).is_visible()
+    assert page.get_by_text('Weekly cap · Opus',exact=True).is_visible()
+    assert page.get_by_text('Weekly cap · Sonnet',exact=True).count()==0,'unreported per-model caps stay hidden'
+    claude=page.locator('#oc-telemetry').evaluate("""e=>{
+      const section=[...e.shadowRoot.querySelectorAll('section')].find(s=>s.querySelector('h3')?.textContent.startsWith('Anthropic'));
+      return section?{text:section.textContent,meters:section.querySelectorAll('meter').length}:null;
+    }""")
+    assert claude,'the Anthropic section must render once it is reported'
+    assert 'Monthly cap' not in claude['text'],'Anthropic has no monthly window'
+    assert 'refresh every 5 minutes' in claude['text'],'the slower cadence must be disclosed'
+    assert 'Stale' not in claude['text'],'a fresh reading must not be labelled stale'
+    assert claude['meters']==3,claude
     assert page.locator('#root').bounding_box()['width']==1140
     page.screenshot(path=str(out/'sidebar-dark.png'))
     page.get_by_role('button',name='Telemetry',exact=True).click()

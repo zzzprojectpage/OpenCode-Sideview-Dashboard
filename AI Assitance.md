@@ -13,7 +13,7 @@ Two independent halves must both work. Test them separately, because they fail d
 | Half | Lives in | Delivers | Fails as |
 |---|---|---|---|
 | Renderer patch | inside the app's `app.asar` | the sidebar panel itself | no panel at all |
-| Server plugin | `~/.config/opencode/plugins/local-telemetry/` | Go/OpenAI cap numbers | panel renders, caps say Unavailable |
+| Server plugin | `~/.config/opencode/plugins/local-telemetry/` | Go/OpenAI (and optional Anthropic) cap numbers | panel renders, caps say Unavailable |
 
 The session metrics (context, cost, speed, cache, MCPs, model share) come from the renderer
 half alone. Only the cap sections need the plugin. That split tells you which half broke.
@@ -22,6 +22,10 @@ The **Search** panel (1.1.0) spans both halves: the renderer owns the button, pa
 navigation; the server plugin owns the database read. It fails in its own way: an old
 renderer has no button at all, and an old (or not restarted) plugin makes searches answer
 `Search failed.`
+
+The **Anthropic** section (1.2.0) is opt-in and lives in the server plugin plus one settings
+file. Anthropic is absent from the snapshot until `~/.config/opencode/local-telemetry.json` names
+a Claude login, so "no Anthropic section" is the normal state, not a fault.
 
 ## Invariants
 
@@ -37,6 +41,10 @@ renderer has no button at all, and an old (or not restarted) plugin makes search
    install state, not release content. `build_release.py` enforces this with a `PROTECTED` set.
 8. **Search never writes.** The database is opened read-only, a test proves the connection refuses
    writes, and reasoning/tool content is never searched or returned.
+9. **The Claude login file is read-only and its token goes to one place.** The plugin never writes,
+   refreshes or copies it, and sends its token only to `https://api.anthropic.com/api/oauth/usage`.
+   OpenCode's own Anthropic connection (an API key or a proxy key) is never sent to Anthropic. Every
+   error about the login is a fixed message: no path, file content or token is ever echoed.
 
 ## Where state lives
 
@@ -55,6 +63,19 @@ project folder on purpose: that folder is what the user shares, and ~236 MB of a
 both bloats an upload and invites a cleanup that strands a patched install. An install made by
 an older version that kept state in the folder is moved out automatically by `migrate_state()`
 on the next run; `py patch_desktop.py migrate` does it on demand.
+
+## Where configuration lives
+
+The only user configuration is the optional `~/.config/opencode/local-telemetry.json` (override
+with `OPENCODE_TELEMETRY_SETTINGS`). It holds no secret, only the path of a Claude login:
+
+```
+{ "anthropic": { "credentialPath": "C:/path/to/claude/login" } }
+```
+
+`credentialPath` is a file, or a folder of `claude-*.json` files (newest usable one wins). It is
+re-read on every snapshot, so editing it needs no reinstall. It is not part of the install:
+`Rollback-Sidebar.cmd` leaves it alone.
 
 ## The install pipeline
 
@@ -123,8 +144,8 @@ The server plugin half failed.
    `package.json`, `src/quota.mjs`.
 2. **Did it load?** Search the log at `~/.local/share/opencode/log/opencode.log` for
    `local.telemetry`. A resolve error mentioning `@opencode/plugin` means an old build that
-   imported that package; the current plugin has no imports besides `node:crypto` and
-   `./src/quota.mjs`.
+   imported that package; the current plugin imports only Node builtins (`node:*`) and its own
+   `./src/*.mjs` files.
 3. **Duplicate id?** Two copies of the plugin cannot coexist; OpenCode reports
    `Duplicate plugin ID: local.telemetry`. Remove the extra copy.
 4. **Signed in?** `py patch_desktop.py` cannot check this. Run `opencode auth list`: a provider
@@ -169,7 +190,30 @@ a provider means editing all three. Most API-key providers are pay-per-token and
 at all — do not fabricate one. Balance or spend is the honest substitute where the provider
 offers it.
 
-### 7. The per-model split is missing
+### 7. The Anthropic section is missing, or unhealthy
+
+The section exists only when `local-telemetry.json` names a Claude login, so first work out which
+of these you have:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| No Anthropic section at all | No settings file, no `anthropic.credentialPath`, or a plugin older than 1.2.0 | Create the file (see `README.md`); re-run `Install-Sidebar.cmd` if the plugin is old |
+| `Telemetry settings file cannot be read as JSON` | The settings file exists but is not valid JSON | Fix the JSON (a byte-order mark is tolerated) |
+| `Claude login not found at the configured path` | The path does not exist | Correct `credentialPath`; forward slashes are fine on Windows |
+| `No Claude login file at the configured path` | The folder has no `claude-*.json` | Point at the file, or at the folder that holds them |
+| `Claude login file is not usable` | Not JSON, no token, or neither the CLIProxyAPI nor the Claude Code layout | Check `type` is `claude` and `access_token` exists. Never paste the token anywhere |
+| `Claude login has expired; …` | The token lapsed and its owner has not renewed it yet | Use Claude once through the app that owns the login; the last reading shows as `Stale` meanwhile |
+| `Usage request returned HTTP 401` or `403` | Token rejected, missing the `user:profile` scope, or not a subscription login | Sign in again; API keys cannot read subscription limits |
+| `Usage request returned HTTP 429` | Anthropic rate-limits this endpoint | Wait: the plugin backs off ten minutes and keeps the last reading |
+
+To check the reading outside the app, call the shipping plugin with no connections. It reads only
+the login file, makes one request, and prints the state and percentages, never the token:
+
+```
+node -e "import('./index.ts').then(async m=>{const r=[];await m.default.setup({options:{},integration:{connection:{active:async()=>null,resolve:async()=>null}},rpc:{register:async(c,h)=>r.push(h)}});console.log(JSON.stringify((await r[0].snapshot({})).providers.find(p=>p.provider==='anthropic'),null,1))})"
+```
+
+### 8. The per-model split is missing
 
 It only appears for OpenCode Go, and only when all of these hold:
 
@@ -181,12 +225,12 @@ It only appears for OpenCode Go, and only when all of these hold:
 If every Go model has zero cost, the split cannot be apportioned and the panel says so instead
 of showing percentages.
 
-### 8. The sidebar vanished after an OpenCode update
+### 9. The sidebar vanished after an OpenCode update
 
 Expected. An update replaces `app.asar`. Run `Install-Sidebar.cmd` again; it upgrades in place
 from the pristine backup.
 
-### 9. Tests fail
+### 10. Tests fail
 
 ```
 node --test tests/*.test.mjs
@@ -203,6 +247,9 @@ Platform notes that have bitten this project before:
   reports which files it could not update instead of failing.
 - **`mkdir`/`move` collisions.** Always use unique destinations; a plain move onto an existing
   folder raises on Windows.
+- **Settings isolation.** `plugin.test.mjs` pins `OPENCODE_TELEMETRY_SETTINGS` to a missing file, so
+  the tests never read the developer's real settings (which may name a real Claude login) and never
+  contact Anthropic. Keep any new plugin test behind that pin.
 
 ## Verifying a change
 
@@ -231,6 +278,7 @@ because a working install on a development machine hides staging assumptions.
 | Is the archive patched? | `py patch_desktop.py verify`, or grep the bundle for `__localTelemetryAttach` |
 | Does search work outside the app? | `node verification/search_live.mjs <term>` |
 | What was upgraded? | `build/installed.json` (`pluginDigests`) and the printed stage summary |
+| Is the Anthropic section switched on? | `~/.config/opencode/local-telemetry.json` (`anthropic.credentialPath`) |
 
 ## Files
 
@@ -238,12 +286,13 @@ because a working install on a development machine hides staging assumptions.
 patch_desktop.py     install / stage / rollback / verify; owns the ASAR read-write
 discovery.py         finds the bundle and client factory by shape; owns the JS scanner
 index.ts             server plugin: credentials -> provider usage -> percentages over RPC;
+                     optional Claude login file -> Anthropic usage (read-only, opt-in);
                      search -> read-only SQLite query over session history
 src/sidebar.mjs      panel UI, client hook, rendering, refresh loop, search panel + navigation
 src/search.mjs       search core: query shape, text extraction, snippets, session walk
 src/metrics.mjs      session metrics from messages
 src/attribution.mjs  per-model split of a Go cap window
-src/quota.mjs        normalises each provider's usage response
+src/quota.mjs        normalises each provider's usage response; picks the token out of a Claude login
 tests/               unit, patch-integrity, and browser tests
 verification/        fresh-download and live-service probes (not shipped to users)
 ```

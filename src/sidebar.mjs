@@ -101,6 +101,16 @@ export function renderSearchResults(items, query) {
   }).join('');
 }
 
+// The cap sections, in display order. Anthropic has no monthly cap, and its per-model weekly
+// caps depend on the plan, so those rows (marked optional) show only when they are reported.
+const CAP_ROWS = [['fiveHour','5-hour cap'],['weekly','Weekly cap'],['monthly','Monthly cap']];
+const CLAUDE_ROWS = [['fiveHour','5-hour cap'],['weekly','Weekly cap'],['weeklyOpus','Weekly cap · Opus',true],['weeklySonnet','Weekly cap · Sonnet',true]];
+const CAP_SECTIONS = [
+  {id:'opencode-go',title:'OpenCode Go',rows:CAP_ROWS,always:true},
+  {id:'openai',title:'OpenAI',rows:CAP_ROWS,always:true},
+  {id:'anthropic',title:'Anthropic',rows:CLAUDE_ROWS,always:false},
+];
+
 const readStored = (key, fallback = null) => {
   try { const value = localStorage.getItem(key); return value === null ? fallback : value; } catch { return fallback; }
 };
@@ -121,20 +131,29 @@ export function renderSnapshot({metrics, quotas, splits, error, updated, scope='
       : '';
     return `<div class="bysplit"><small class="label">By model · estimated</small>${rows}${split.note ? `<small class="sub">${escape(split.note)}</small>` : ''}</div>`;
   };
-  const quotasHTML = ['opencode-go','openai'].map(id => {
+  const quotasHTML = CAP_SECTIONS.map(({id,title,rows,always}) => {
     const q = quotas?.find(q=>q.provider===id);
-    const stale = q?.state==='stale' || (q?.checked && Date.now()-q.checked>120000);
-    return `<section><h3>${id==='openai'?'OpenAI':'OpenCode Go'} <span class="status">${stale?'Stale':escape(q?.state || 'Loading')}</span></h3>
+    // Go and OpenAI always have a section; Anthropic has one only once the plugin reports it.
+    if (!always && !q) return '';
+    // A reading is stale once it is older than a refresh plus the panel's own poll. Providers that
+    // refresh more slowly than the default minute (Anthropic) say so in refreshMs.
+    const staleAfter = q?.refreshMs > 60000 ? q.refreshMs + 120000 : 120000;
+    const stale = q?.state==='stale' || (q?.checked && Date.now()-q.checked>staleAfter);
+    return `<section><h3>${title} <span class="status">${stale?'Stale':escape(q?.state || 'Loading')}</span></h3>
       ${q?.message?`<small>${escape(q.message)}</small>`:''}
-      ${[['fiveHour','5-hour cap'],['weekly','Weekly cap'],['monthly','Monthly cap']].map(([key,label])=>{
+      ${rows.map(([key,label,optional])=>{
         const w=q?.windows?.[key];
+        if (optional && !w) return '';
         const expired=w?.reset && Date.parse(w.reset)<=Date.now();
+        // A window with no reset has not started yet (for example an idle 5-hour session).
+        const when=w?.reset?`${stale||expired?'Last reported reset':'Resets'} ${escape(new Date(w.reset).toLocaleString())}`:'No active window';
         return `<div class="quota"><div class="row"><span>${label}</span><strong>${w?`${pct(w.used)} used`:'Unavailable'}</strong></div>${bar(w?.used,`${label} used`)}
-          <small>${w?`${pct(w.remaining)} left · ${stale||expired?'Last reported reset':'Resets'} ${escape(new Date(w.reset).toLocaleString())}`:'Not reported by the provider'}</small>
+          <small>${w?`${pct(w.remaining)} left · ${when}`:'Not reported by the provider'}</small>
           ${w && id==='opencode-go' ? splitHTML(splits?.[key]) : ''}</div>`;
       }).join('')}
       ${q?.checked?`<small>Checked ${escape(new Date(q.checked).toLocaleTimeString())}</small>`:''}
       ${id==='opencode-go' && q?.state==='quota' ? '<small class="sub">Model shares are estimated from locally recorded OpenCode Go cost in the same window. Go reports only window totals, and usage from other machines or clients is not counted.</small>' : ''}
+      ${id==='anthropic' && (q?.state==='quota' || q?.state==='stale') ? '<small class="sub">Claude subscription limits, read with the Claude login configured for this sidebar. Anthropic allows only occasional reads, so they refresh every 5 minutes.</small>' : ''}
     </section>`;
   }).join('');
   return `${error?`<p class="notice" role="status">${escape(error)}</p>`:''}
@@ -190,7 +209,9 @@ function bind(client, sessionID) {
     debug.session=sessionID;
     if (current?.client === client && current.sessionID === sessionID) return;
     current={client,sessionID};generation++;lastQuota=0;
-    snapshot={metrics:null,quotas:[],updated:null,error:null};
+    // Quotas belong to the account, not the session, so they survive a session switch. That keeps
+    // the Anthropic section (which exists only once reported) from vanishing until the next refresh.
+    snapshot={metrics:null,quotas:snapshot.quotas||[],splits:snapshot.splits??null,updated:null,error:null};
     mount();draw();void refresh().catch(()=>{});
   } catch {}
 }

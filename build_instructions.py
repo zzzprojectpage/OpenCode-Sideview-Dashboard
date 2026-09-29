@@ -73,7 +73,8 @@ def main():
         'A right-hand sidebar for the OpenCode desktop app. It shows live session '
         'telemetry: context-window usage, session cost, generation speed, cache hit '
         'ratio, MCP usage, your OpenCode Go and OpenAI subscription caps (5-hour, '
-        'weekly, monthly), and an estimated per-model share of each Go cap window. '
+        'weekly, monthly), optionally your Anthropic (Claude) 5-hour and weekly '
+        'limits, and an estimated per-model share of each Go cap window. '
         'A Search button beside it finds text across every past session.')
     bullets(document, [
         'Context window in percent and tokens, for the latest measured request.',
@@ -82,6 +83,8 @@ def main():
         'Cache hit ratio (cached reads over all input tokens).',
         'MCP servers with per-server call counts in the active context.',
         'OpenCode Go and OpenAI caps with reset times and remaining percent.',
+        'Optional: Anthropic (Claude) 5-hour and weekly limits, from a Claude login you '
+        'point the sidebar at.',
         'Estimated per-model share of each Go cap window.',
         'History search over user prompts and agent replies, opening hits as new tabs.',
     ])
@@ -143,6 +146,29 @@ def main():
         'finds nothing does not slow the app down: typing again cancels the previous search.',
     ])
 
+    heading(document, 'Anthropic (Claude) limits (optional)', level=1)
+    document.add_paragraph(
+        'An Anthropic section shows your Claude subscription\u2019s 5-hour and weekly limits '
+        'as used and remaining percent with reset times. It is off until you switch it on, '
+        'because OpenCode holds only an API key (or a local proxy\u2019s key) for Anthropic, '
+        'and neither can read subscription limits. The sidebar needs the Claude login instead.')
+    for step in [
+        'Create %USERPROFILE%\\.config\\opencode\\local-telemetry.json containing '
+        '{ "anthropic": { "credentialPath": "C:/path/to/your/claude/login" } }. The path is '
+        'one login file, or a folder of claude-*.json files.',
+        'Within a minute the Anthropic section appears after the other caps. No restart is '
+        'needed once this version is installed.',
+    ]:
+        document.add_paragraph(step, style='List Number')
+    bullets(document, [
+        'The login file is only read, never written, and its token is sent only to '
+        'Anthropic\u2019s usage endpoint. The sidebar receives percentages and reset times only.',
+        'The endpoint is undocumented and rate-limited, so it refreshes every 5 minutes; if '
+        'it fails, the last reading stays on screen labelled Stale.',
+        'It needs a Claude subscription login; API keys have no caps. Whether a third-party '
+        'tool may use your subscription login is governed by Anthropic\u2019s terms.',
+    ])
+
     heading(document, 'Reading the numbers honestly', level=1)
     bullets(document, [
         'Window totals (1% used, 64% used, \u2026) come from the provider and are exact.',
@@ -180,8 +206,8 @@ def main():
         'The original app archive is backed up before anything is replaced.',
         'Your credentials never leave the OpenCode server process; the sidebar only ever '
         'receives percentages and reset times.',
-        'Nothing is uploaded anywhere. The only network requests are to the two provider '
-        'usage endpoints.',
+        'Nothing is uploaded anywhere. The only network requests are to the providers\u2019 '
+        'own usage endpoints (Anthropic\u2019s only if you enable it).',
     ])
 
     document.save(OUT)

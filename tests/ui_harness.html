@@ -31,7 +31,11 @@ const client={
   model:{list:async()=>({data:[{providerID:'openai',id:'Test model',limit:{context:1000}}]})},
   mcp:{list:async()=>({data:[{name:'context7',status:{type:'connected'}}]})},
   rpc:()=>({
-    snapshot:async()=>{window.rpcCalls++;return {providers:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:25,remaining:75,reset:new Date(Date.now()+2*3600*1000).toISOString()},weekly:null,monthly:null}}]}},
+    snapshot:async()=>{window.rpcCalls++;const soon=hours=>new Date(Date.now()+hours*3600*1000).toISOString();return {providers:[
+      {provider:'opencode-go',state:'quota',checked:Date.now(),windows:{fiveHour:{used:25,remaining:75,reset:soon(2)},weekly:null,monthly:null}},
+      // Synthetic Claude subscription reading; per-model Opus cap present, Sonnet not reported by the plan.
+      {provider:'anthropic',state:'quota',checked:Date.now(),refreshMs:300000,windows:{fiveHour:{used:41,remaining:59,reset:soon(3)},weekly:{used:13,remaining:87,reset:soon(72)},weeklyOpus:{used:7,remaining:93,reset:soon(72)},weeklySonnet:null,monthly:null}},
+    ]}},
     search:async(input)=>{
       window.searchCalls.push(input);
       const q=(input&&input.query||'').toLowerCase();

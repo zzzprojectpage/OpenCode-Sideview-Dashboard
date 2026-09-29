@@ -8,6 +8,9 @@ A right-hand sidebar for the **OpenCode desktop app** showing live session telem
 - **Cache hit ratio**
 - **MCP servers** and how many calls each one served
 - **OpenCode Go and OpenAI subscription caps** — 5-hour, weekly and monthly, as used/remaining percent with reset times
+- **Anthropic (Claude) subscription caps** — 5-hour and weekly, plus the per-model weekly caps where
+  your plan has them, read from a Claude login you point the sidebar at. Optional: see
+  [Anthropic limits](#anthropic-claude-limits-optional)
 - **Estimated per-model share** of each OpenCode Go cap window
 - **Model token share** inside the active context
 - **History search** — a Search button beside Telemetry that finds text in every session
@@ -39,6 +42,52 @@ tab, leaving your currently open sessions untouched.
 Search reads the current V2 store (`session_v2` / `session_message`) read-only, with whichever
 SQLite driver the server ships. It needs the server half of this project, so an install that
 predates 1.1.0 answers `Search failed.` until OpenCode is restarted after the update.
+
+---
+
+## Anthropic (Claude) limits (optional)
+
+The **Anthropic** section shows your Claude subscription's **5-hour** and **weekly** limits (and the
+weekly Opus/Sonnet caps on plans that have them) as used/remaining percent with reset times. It is
+off until you switch it on, because OpenCode cannot supply this itself: it holds an API key (or a
+local proxy's key) for Anthropic, and neither can read subscription limits. The sidebar needs the
+Claude *login* instead, so you point it at the file that holds it.
+
+1. Create `~/.config/opencode/local-telemetry.json` (on Windows,
+   `%USERPROFILE%\.config\opencode\local-telemetry.json`):
+
+   ```json
+   {
+     "anthropic": {
+       "credentialPath": "C:/path/to/your/claude/login"
+     }
+   }
+   ```
+
+   `credentialPath` is either one login file or a folder of `claude-*.json` files (the newest usable
+   one wins). Two layouts are understood: the files
+   [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) writes for a Claude sign-in
+   (`type: "claude"`, `access_token`, `expired`), and Claude Code's `~/.claude/.credentials.json`.
+2. The **Anthropic** section appears after the other caps within a minute. The settings file is
+   re-read on every refresh, so no restart is needed once this version is installed.
+
+What it does with that file:
+
+- The server plugin **only reads** it. It never writes, refreshes or copies it, and it sends the token
+  to `https://api.anthropic.com/api/oauth/usage` and nowhere else. The sidebar receives percentages
+  and reset times only. Your OpenCode Anthropic key is never used or sent.
+- When the login has expired (the app that owns it renews it the next time it uses Claude), the
+  panel says so and keeps the last reading, labelled **Stale**.
+- Remove the settings entry, or the file, and the section disappears. Nothing is read without it.
+
+Limits worth knowing:
+
+- This is **Anthropic's undocumented usage endpoint**, the one Claude Code's `/usage` reads. Anthropic
+  can change or remove it, and it rate-limits hard, so readings refresh **every 5 minutes**, and a
+  rate-limit answer keeps the last reading and backs off for ten minutes.
+- It needs a Claude **subscription** (Pro/Max) login. API keys are pay-per-token and have no caps.
+- Whether a third-party tool may use your subscription login is governed by Anthropic's terms.
+  Enabling this is your decision.
 
 ---
 
@@ -103,6 +152,7 @@ This project makes two changes, both reversible:
    OpenCode Go and OpenAI credentials *inside the OpenCode server process*, calls each
    provider's own usage endpoint, and returns **only percentages and reset times** over a
    local RPC. Credentials never reach the UI, and are never written to disk by this project.
+   If you enable the Anthropic section, it also reads the Claude login file you name, read-only.
    The same plugin answers the sidebar's history search: it opens the local SQLite database
    read-only and returns matched message text and location fields. It never writes.
 
@@ -119,10 +169,11 @@ verified against `@opencode/desktop` **2.0.18**.
 | MCP calls | tool calls in the active context | observed |
 | Model token share | tokens per model in the active context | measured |
 | Go / OpenAI window totals | each provider's usage API | provider-reported |
+| Anthropic 5-hour / weekly caps | Anthropic's usage endpoint, via your Claude login file | provider-reported |
 | Per-model share of a Go cap | provider total × local cost share | **estimated** |
 
 Everything is computed locally from your own machine. Nothing is uploaded anywhere;
-the only outbound requests are to the two provider usage endpoints.
+the only outbound requests are to the providers' own usage endpoints (Anthropic's only if you enable it).
 
 ---
 
@@ -148,9 +199,14 @@ Three consequences:
 provider makes its models appear in *Context*, *Speed*, *Cache ratio* and *Model token
 share* with no changes needed — that part is fully data-driven. Cap sections are not,
 because there is no standard quota API: each provider needs its own endpoint and field
-names. On top of that, most API-key providers (Anthropic, DeepSeek, Mistral, …) are
-pay-per-token and have **no cap window at all**; for those the honest readout would be
-spend or balance, or nothing.
+names. On top of that, most API-key providers (DeepSeek, Mistral, an Anthropic API key, …)
+are pay-per-token and have **no cap window at all**; for those the honest readout would be
+spend or balance, or nothing. Anthropic's *subscription* limits are the exception, through
+the optional [login-file setup](#anthropic-claude-limits-optional).
+
+**The Anthropic caps rest on an undocumented endpoint.** It is the one Claude Code's `/usage`
+uses, so it can change or disappear without notice, and it is rate-limited, which is why it is
+read only every five minutes. When it fails, the last reading stays on screen as `Stale`.
 
 **Desktop updates may remove the patch.** A new OpenCode release replaces `app.asar`, so the
 sidebar disappears until you run `Install-Sidebar.cmd` again. Running it again is safe: it
@@ -185,6 +241,19 @@ The plugin failed to load or you are signed out. Check that
 **Quota shows `Stale`.**
 A refresh failed; the last successful reading stays on screen rather than disappearing.
 It will recover on the next successful refresh.
+
+**The Anthropic section is missing.**
+It appears only after `~/.config/opencode/local-telemetry.json` names a Claude login (see
+[Anthropic limits](#anthropic-claude-limits-optional)) and a minute has passed.
+
+**The Anthropic section says the login was not found, is not usable, or has expired.**
+The path in the settings file is wrong, the file is not a Claude sign-in, or its token has
+lapsed; the app that owns the login renews it the next time it uses Claude. The last reading
+stays on screen as `Stale` meanwhile.
+
+**The Anthropic section says `HTTP 429`.**
+Anthropic rate-limited the usage endpoint. The last reading stays on screen, and the sidebar
+waits ten minutes before asking again.
 
 ---
 

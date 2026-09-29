@@ -77,6 +77,50 @@ test('per-model splits appear under the Go caps only, labelled as estimated',()=
   assert.ok(!noSplit.includes('By model · estimated'),'no split data means no split section');
   assert.ok(noSplit.includes('8% used'));
 });
+const claude=(windows,extra={})=>({provider:'anthropic',state:'quota',checked:Date.now(),refreshMs:300000,windows,...extra});
+const inHours=hours=>new Date(Date.now()+hours*3600000).toISOString();
+const sectionOf=(html,title)=>html.split('<section>').find(part=>part.startsWith(`<h3>${title} `));
+test('Anthropic gets a cap section only when it is reported, and never a monthly row',()=>{
+  const without=renderSnapshot({quotas:[{provider:'opencode-go',state:'quota',checked:Date.now(),windows:{}}]});
+  assert.ok(!without.includes('Anthropic'),'no Claude login configured means no section');
+  const html=renderSnapshot({quotas:[claude({fiveHour:{used:41,remaining:59,reset:inHours(3)},weekly:{used:13,remaining:87,reset:inHours(90)},weeklyOpus:null,weeklySonnet:null})]});
+  const section=sectionOf(html,'Anthropic');
+  assert.ok(section,'the section renders');
+  assert.ok(section.includes('41% used'));
+  assert.ok(section.includes('13% used'));
+  assert.ok(section.includes('5-hour cap')&&section.includes('Weekly cap'));
+  assert.ok(!section.includes('Monthly cap'),'Anthropic has no monthly window');
+  assert.ok(!section.includes('Opus')&&!section.includes('Sonnet'),'plan-dependent rows stay hidden until reported');
+  assert.ok(section.includes('refresh every 5 minutes'),'the slower cadence is disclosed');
+  assert.equal((html.match(/Monthly cap/g)||[]).length,2,'Go and OpenAI keep their monthly rows');
+});
+test('per-model Anthropic caps show when the plan reports them',()=>{
+  const html=renderSnapshot({quotas:[claude({fiveHour:{used:1,remaining:99,reset:inHours(1)},weekly:{used:2,remaining:98,reset:inHours(2)},
+    weeklyOpus:{used:7,remaining:93,reset:inHours(5)},weeklySonnet:{used:9,remaining:91,reset:inHours(5)}})]});
+  const section=sectionOf(html,'Anthropic');
+  assert.ok(section.includes('Weekly cap · Opus')&&section.includes('7% used'));
+  assert.ok(section.includes('Weekly cap · Sonnet')&&section.includes('9% used'));
+});
+test('a window with no reset says it has not started, rather than printing a 1970 date',()=>{
+  const section=sectionOf(renderSnapshot({quotas:[claude({fiveHour:{used:0,remaining:100,reset:null},weekly:null})]}),'Anthropic');
+  assert.ok(section.includes('0% used'));
+  assert.ok(section.includes('100% left · No active window'));
+  assert.ok(!/1970|1\/1\/70/.test(section));
+  assert.ok(section.includes('Not reported by the provider'),'the missing weekly window is still unavailable, not zero');
+});
+test('a slow-refreshing provider is not called stale between its own refreshes',()=>{
+  const at=(ms,extra={})=>sectionOf(renderSnapshot({quotas:[claude({fiveHour:{used:5,remaining:95,reset:inHours(1)}},{checked:Date.now()-ms,...extra})]}),'Anthropic');
+  assert.ok(!at(3*60000).includes('>Stale<'),'3 minutes old is normal on a 5-minute cadence');
+  assert.ok(at(8*60000).includes('>Stale<'),'well past the cadence is stale');
+  assert.ok(at(3*60000,{refreshMs:undefined}).includes('>Stale<'),'without a cadence the default two minutes applies');
+  const go=renderSnapshot({quotas:[{provider:'opencode-go',state:'quota',refreshMs:60000,checked:Date.now()-3*60000,windows:{fiveHour:{used:5,remaining:95,reset:inHours(1)}}}]});
+  assert.ok(sectionOf(go,'OpenCode Go').includes('>Stale<'),'the default providers keep the two-minute rule');
+});
+test('Anthropic status text is escaped like every other provider string',()=>{
+  const html=renderSnapshot({quotas:[claude({},{state:'unauthorized',message:'<img src=x onerror=alert(1)>'})]});
+  assert.ok(html.includes('&lt;img'));
+  assert.ok(!html.includes('<img'));
+});
 test('real desktop client shape: message list is top-level, session.message has no list',()=>{
   const session={get:async()=>({}),context:async()=>[],message:{get:async()=>({})}};
   const message={list:async()=>[]};
